@@ -80,6 +80,25 @@ use std::time::SystemTime;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TenantId(pub String);
 
+impl TenantId {
+    /// Construct from any string-like source.
+    pub fn new<S: Into<String>>(s: S) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<&str> for TenantId {
+    fn from(s: &str) -> Self {
+        TenantId(s.to_owned())
+    }
+}
+
+impl From<String> for TenantId {
+    fn from(s: String) -> Self {
+        TenantId(s)
+    }
+}
+
 impl fmt::Display for TenantId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -92,6 +111,24 @@ impl fmt::Display for TenantId {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ThreadId(pub String);
 
+impl ThreadId {
+    pub fn new<S: Into<String>>(s: S) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<&str> for ThreadId {
+    fn from(s: &str) -> Self {
+        ThreadId(s.to_owned())
+    }
+}
+
+impl From<String> for ThreadId {
+    fn from(s: String) -> Self {
+        ThreadId(s)
+    }
+}
+
 impl fmt::Display for ThreadId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -101,6 +138,24 @@ impl fmt::Display for ThreadId {
 /// Strongly typed message identifier (scoped within a TenantId + ThreadId).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MessageId(pub String);
+
+impl MessageId {
+    pub fn new<S: Into<String>>(s: S) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<&str> for MessageId {
+    fn from(s: &str) -> Self {
+        MessageId(s.to_owned())
+    }
+}
+
+impl From<String> for MessageId {
+    fn from(s: String) -> Self {
+        MessageId(s)
+    }
+}
 
 impl fmt::Display for MessageId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -114,6 +169,25 @@ impl fmt::Display for MessageId {
 /// "openai/gpt-4o", "anthropic/claude-3-sonnet", etc.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LogicalModelId(pub String);
+
+impl LogicalModelId {
+    /// Construct from any string-like source.
+    pub fn new<S: Into<String>>(s: S) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<&str> for LogicalModelId {
+    fn from(s: &str) -> Self {
+        LogicalModelId(s.to_owned())
+    }
+}
+
+impl From<String> for LogicalModelId {
+    fn from(s: String) -> Self {
+        LogicalModelId(s)
+    }
+}
 
 impl fmt::Display for LogicalModelId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -129,6 +203,13 @@ impl fmt::Display for LogicalModelId {
 /// - Old versions MUST NOT be mutated or re-used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ThreadConfigVersion(pub u64);
+
+impl ThreadConfigVersion {
+    /// Construct from a raw version number.
+    pub fn new(v: u64) -> Self {
+        ThreadConfigVersion(v)
+    }
+}
 
 impl fmt::Display for ThreadConfigVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -185,6 +266,48 @@ pub struct PackedHistory {
 /// - MUST NOT leak redacted content or secrets into `MessageForPrompt`.
 pub trait HistoryPacker {
     fn pack(&self, thread: &Thread, messages: &[Message]) -> PackedHistory;
+}
+
+/// Minimal reference implementation to exercise the packing contracts.
+///
+/// This is intentionally simple and used only to validate that the core
+/// types form a coherent API surface. It packs the most recent messages
+/// up to a configurable soft limit using the `Tail` strategy.
+pub struct DefaultHistoryPacker {
+    max_messages: usize,
+}
+
+impl DefaultHistoryPacker {
+    pub fn new(max_messages: usize) -> Self {
+        Self { max_messages }
+    }
+}
+
+impl HistoryPacker for DefaultHistoryPacker {
+    fn pack(&self, thread: &Thread, messages: &[Message]) -> PackedHistory {
+        let strategy = HistoryPackingStrategy::Tail;
+
+        let truncated = messages.len() > self.max_messages;
+        let start = messages.len().saturating_sub(self.max_messages);
+        let slice = &messages[start..];
+
+        let packed_messages = slice
+            .iter()
+            .map(|m| MessageForPrompt {
+                role: m.role.clone(),
+                content: m.content.clone(),
+            })
+            .collect();
+
+        // Touch thread identity to keep the contract explicit and used.
+        let _ = (&thread.tenant_id, &thread.thread_id);
+
+        PackedHistory {
+            messages: packed_messages,
+            truncated,
+            strategy,
+        }
+    }
 }
 
 /// Snapshot of thread configuration at a specific version.
