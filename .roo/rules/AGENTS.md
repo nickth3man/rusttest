@@ -1,7 +1,3 @@
----
-layout: default
-title: "Agentic Coding"
----
 
 # Agentic Coding: Humans Design, Agents code!
 
@@ -70,28 +66,21 @@ Agentic Coding should be a collaboration between Human System Design and Agent I
       - `output`: a vector of 3072 floats
       - `necessity`: Used by the second node to embed text
     - Example utility implementation:
-      ```rust
-      // src/utils.rs
-      use anyhow::Result;
-      use async_openai::{
-          types::{ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs},
-          Client,
-      };
+      ```python
+      # utils/call_llm.rs
+      from openai import OpenAI
 
-      pub async fn call_llm(prompt: &str) -> Result<String> {
-          let client = Client::new();
-          let request = CreateChatCompletionRequestArgs::default()
-              .model("gpt-4o")
-              .messages(vec![ChatCompletionRequestMessage::User(
-                  ChatCompletionRequestUserMessageArgs::default()
-                      .content(prompt)
-                      .build()?
-                      .into()
-              )])
-              .build()?;
-          let response = client.chat().create(request).await?;
-          Ok(response.choices[0].message.content.clone().unwrap_or_default())
-      }
+      def call_llm(prompt):    
+          client = OpenAI(api_key="YOUR_API_KEY_HERE")
+          r = client.chat.completions.create(
+              model="gpt-4o",
+              messages=[{"role": "user", "content": prompt}]
+          )
+          return r.choices[0].message.content
+          
+      if __name__ == "__main__":
+          prompt = "What is the meaning of life?"
+          print(call_llm(prompt))
       ```
     - > **Sometimes, design Utilities before Flow:**  For example, for an LLM project to automate a legacy system, the bottleneck will likely be the available interface to that system. Start by designing the hardest utilities for interfacing, and then build the flow around them.
       {: .best-practice }
@@ -104,19 +93,17 @@ Agentic Coding should be a collaboration between Human System Design and Agent I
       - For more complex systems or when persistence is required, use a database.
       - **Don't Repeat Yourself**: Use in-memory references or foreign keys.
       - Example shared store design:
-        ```rust
-        use serde_json::json;
-        use pockeflow_rs::Context;
-        
-        let mut context = Context::new();
-        context.set("user", json!({
-            "id": "user123",
-            "context": {
-                "weather": {"temp": 72, "condition": "sunny"},
-                "location": "San Francisco"
-            }
-        }));
-        context.set("results", json!({}));
+        ```python
+        shared = {
+            "user": {
+                "id": "user123",
+                "context": {                # Another nested dict
+                    "weather": {"temp": 72, "condition": "sunny"},
+                    "location": "San Francisco"
+                }
+            },
+            "results": {}                   # Empty dict to store outputs
+        }
         ```
 
 5. **Node Design**: Plan how each node will read and write data, and use utility functions.
@@ -231,12 +218,10 @@ my_project/
 
   The shared store structure is organized as follows:
 
-  ```rust
-  use pockeflow_rs::Context;
-  use serde_json::json;
-  
-  let mut context = Context::new();
-  context.set("key", json!("value"));
+  ```python
+  shared = {
+      "key": "value"
+  }
   ```
 
   ### Node Steps
@@ -259,175 +244,173 @@ my_project/
 - **`utils/`**: Contains all utility functions.
   - It's recommended to dedicate one Python file to each API call, for example `call_llm.rs` or `search_web.rs`.
   - Each file should also include a `main()` function to try that API call
-  ```rust
-  // src/utils.rs
-  use anyhow::Result;
-  use reqwest::Client;
-  use serde_json::json;
-  use std::env;
+  ```python
+  from google import genai
+  import os
 
-  pub async fn call_llm(prompt: &str) -> Result<String> {
-      let api_key = env::var("GEMINI_API_KEY")?;
-      let model = env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".to_string());
-      
-      let client = Client::new();
-      let response = client
-          .post(format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", model))
-          .header("x-goog-api-key", api_key)
-          .json(&json!({
-              "contents": [{"parts": [{"text": prompt}]}]
-          }))
-          .send()
-          .await?;
-      
-      let result: serde_json::Value = response.json().await?;
-      Ok(result["candidates"][0]["content"]["parts"][0]["text"]
-          .as_str()
-          .unwrap_or_default()
-          .to_string())
-  }
+  def call_llm(prompt: str) -> str:
+      client = genai.Client(
+          api_key=os.getenv("GEMINI_API_KEY", ""),
+      )
+      model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+      response = client.models.generate_content(model=model, contents=[prompt])
+      return response.text
 
-  #[tokio::main]
-  async fn main() -> Result<()> {
-      let test_prompt = "Hello, how are you?";
-      println!("Making call...");
-      let response = call_llm(test_prompt).await?;
-      println!("Response: {}", response);
-      Ok(())
-  }
+  if __name__ == "__main__":
+      test_prompt = "Hello, how are you?"
+
+      # First call - should hit the API
+      print("Making call...")
+      response1 = call_llm(test_prompt, use_cache=False)
+      print(f"Response: {response1}")
   ```
 
 - **`src/nodes.rs`**: Contains all the node definitions.
   ```rust
   // src/nodes.rs
-  use pocketflow_rs::{Node, Context};
+  use anyhow::Result;
+  use async_trait::async_trait;
+  use pocketflow_rs::{Context, Node, ProcessResult};
+  use serde_json::json;
+  use tokio::io::{self, AsyncBufReadExt};
+
+  use crate::state::MyState;
   use crate::utils::call_llm;
 
-  struct GetQuestionNode;
+  pub struct GetQuestionNode;
 
-#[async_trait]
-#[async_trait]
-impl Node for GetQuestionNode {
-    type State = MyState;
+  #[async_trait]
+  impl Node for GetQuestionNode {
+      type State = MyState;
 
-    async fn execute(&self, _: serde_json::Value) -> Result<serde_json::Value> {
-        // Get question directly from user input
-        use tokio::io::{self, AsyncBufReadExt};
-        let mut user_question = String::new();
-        println!("Enter your question: ");
-        io::stdin().read_line(&mut user_question).await?;
-        Ok(serde_json::json!(user_question.trim()))
-    }
+      async fn execute(&self, _context: &Context) -> Result<serde_json::Value> {
+          println!("Enter your question: ");
+          let mut reader = io::BufReader::new(tokio::io::stdin());
+          let mut line = String::new();
+          reader.read_line(&mut line).await?;
+          let question = line.trim().to_string();
+          Ok(json!(question))
+      }
 
-    async fn post_process(
-        &self,
-        context: &mut Context,
-        result: &Result<serde_json::Value>,
-    ) -> Result<ProcessResult<MyState>> {
-        // Store the user's question
-        if let Ok(question) = result {
-            context.set("question", question.clone());
-        }
-        Ok(ProcessResult::new(MyState::Success, "default".to_string()))
-    }
-}
+      async fn post_process(
+          &self,
+          context: &mut Context,
+          result: &Result<serde_json::Value>,
+      ) -> Result<ProcessResult<MyState>> {
+          if let Ok(val) = result {
+              context.set("question", val.clone());
+              Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+          } else {
+              Ok(ProcessResult::new(MyState::Failure, "failure".to_string()))
+          }
+      }
+  }
 
-#[async_trait]
-impl Node for AnswerNode {
-    type State = MyState;
+  pub struct AnswerNode;
 
-    async fn prep(&self, context: &Context) -> Result<serde_json::Value> {
-        // Read question from context
-        context.get("question")
-            .cloned()
-            .ok_or_else(|| anyhow!("No question found in context"))
-    }
+  #[async_trait]
+  impl Node for AnswerNode {
+      type State = MyState;
 
-    async fn execute(&self, question: serde_json::Value) -> Result<serde_json::Value> {
-        // Call LLM to get the answer
-        let question_str = question.as_str().unwrap_or_default();
-        let answer = call_llm(question_str).await?;
-        Ok(serde_json::json!(answer))
-    }
+      async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+          let question = context
+              .get("question")
+              .and_then(|v| v.as_str())
+              .unwrap_or("")
+              .to_string();
+          let answer = call_llm(&question).await?;
+          Ok(json!(answer))
+      }
 
-    async fn post_process(
-        &self,
-        context: &mut Context,
-        result: &Result<serde_json::Value>,
-    ) -> Result<ProcessResult<MyState>> {
-        // Store the answer in context
-        if let Ok(answer) = result {
-            context.set("answer", answer.clone());
-        }
-        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
-    }
+      async fn post_process(
+          &self,
+          context: &mut Context,
+          result: &Result<serde_json::Value>,
+      ) -> Result<ProcessResult<MyState>> {
+          if let Ok(val) = result {
+              context.set("answer", val.clone());
+              Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+          } else {
+              Ok(ProcessResult::new(MyState::Failure, "failure".to_string()))
+          }
+      }
+  }
   ```
-- **`src/flow.rs`**: Implements functions that create flows by importing node definitions and connecting them.
+- **`src/main.rs`**: Implements the main entry point that creates and runs the flow.
   ```rust
-  // src/flow.rs
-  use pocketflow_rs::{build_flow, Context};
-  use crate::nodes::{GetQuestionNode, AnswerNode};
-  use crate::state::MyState;
+  // src/main.rs
+  mod state;
+  mod utils;
+  mod nodes;
 
-  pub fn create_qa_flow() -> impl Node<State = MyState> {
-      // Create nodes
-      let get_question_node = GetQuestionNode;
-      let answer_node = AnswerNode;
-      
-      // Build and return the flow
-      build_flow!(
-          start: ("get_question", get_question_node),
-          nodes: [("answer", answer_node)],
+  use anyhow::Result;
+  use pocketflow_rs::{build_flow, Context};
+  use state::MyState;
+  use nodes::{GetQuestionNode, AnswerNode};
+
+  #[tokio::main]
+  async fn main() -> Result<()> {
+      // Instantiate nodes
+      let get_question = GetQuestionNode;
+      let answer = AnswerNode;
+
+      // Build flow
+      let flow = build_flow!(
+          start: ("get_question", get_question),
+          nodes: [("answer", answer)],
           edges: [
               ("get_question", "answer", MyState::Success)
           ]
-      )
-  }
-  ```
-- **`src/main.rs`**: Serves as the project's entry point.
-  ```rust
-  // src/main.rs
-  mod flow;
-  mod nodes;
-  mod state;
-  mod utils;
-  
-  use anyhow::Result;
-  use pocketflow_rs::Context;
-  use flow::create_qa_flow;
-  
-  #[tokio::main]
-  async fn main() -> Result<()> {
-      // Create and run the flow
-      let flow = create_qa_flow();
+      );
+
+      // Shared context
       let context = Context::new();
+
+      // Run flow
       let result_context = flow.run(context).await?;
-  
-      // Print results
-      if let Some(question) = result_context.get("question").and_then(|v| v.as_str()) {
-          println!("Question: {}", question);
+
+      // Read and print results
+      if let Some(q) = result_context.get("question").and_then(|v| v.as_str()) {
+          println!("Question: {}", q);
       }
-      if let Some(answer) = result_context.get("answer").and_then(|v| v.as_str()) {
-          println!("Answer: {}", answer);
+      if let Some(a) = result_context.get("answer").and_then(|v| v.as_str()) {
+          println!("Answer: {}", a);
       }
-  
+
       Ok(())
   }
-  # Please replace this with your own main function
-  def main():
-      shared = {
-          "question": None,  # Will be populated by GetQuestionNode from user input
-          "answer": None     # Will be populated by AnswerNode
+  ```
+- **`src/state.rs`**: Defines the custom state enum for flow transitions.
+  ```rust
+  // src/state.rs
+  use pocketflow_rs::ProcessState;
+
+  #[derive(Debug, Clone, PartialEq)]
+  pub enum MyState {
+      Success,
+      Failure,
+      Default,
+  }
+
+  impl ProcessState for MyState {
+      fn is_default(&self) -> bool {
+          matches!(self, MyState::Default)
       }
 
-      # Create the flow and run it
-      qa_flow = create_qa_flow()
-      qa_flow.run(shared)
-      print(f"Question: {shared['question']}")
-      print(f"Answer: {shared['answer']}")
+      fn to_condition(&self) -> String {
+          match self {
+              MyState::Success => "success".to_string(),
+              MyState::Failure => "failure".to_string(),
+              MyState::Default => "default".to_string(),
+          }
+      }
+  }
 
-  if __name__ == "__main__":
-      main()
+  impl Default for MyState {
+      fn default() -> Self {
+          MyState::Default
+      }
+  }
   ```
 
 ================================================
@@ -588,28 +571,48 @@ A **BatchNode** extends `Node` but changes `prep()` and `exec()`:
 
 ### Example: Summarize a Large File
 
-```python
-class MapSummaries(BatchNode):
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value>
-        # Suppose we have a big file; chunk it
-        content = shared["data"]
-        chunk_size = 10000
-        chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
-        return chunks
+```rust
+// Note: PocketFlow-Rust doesn't have BatchNode in the same way as Python.
+// Instead, you would implement batch processing logic within a regular Node.
 
-    async fn execute(def exec(self, chunk):self, chunk: serde_json::Value) -> Result<serde_json::Value>
-        prompt = f"Summarize this chunk in 10 words: {chunk}"
-        summary = call_llm(prompt)
-        return summary
+pub struct MapSummaries;
 
-    def post(self, shared, prep_res, exec_res_list):
-        combined = "\n".join(exec_res_list)
-        shared["summary"] = combined
-        return "default"
+#[async_trait]
+impl Node for MapSummaries {
+    type State = MyState;
 
-map_summaries = MapSummaries()
-flow = Flow(start=map_summaries)
-flow.run(shared)
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        // Get data from context and chunk it
+        let content = context.get("data")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("No data found"))?;
+        
+        let chunk_size = 10000;
+        let mut summaries = Vec::new();
+        
+        // Process chunks
+        for i in (0..content.len()).step_by(chunk_size) {
+            let end = std::cmp::min(i + chunk_size, content.len());
+            let chunk = &content[i..end];
+            let prompt = format!("Summarize this chunk in 10 words: {}", chunk);
+            let summary = call_llm(&prompt).await?;
+            summaries.push(summary);
+        }
+        
+        Ok(json!(summaries.join("\n")))
+    }
+
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(val) = result {
+            context.set("summary", val.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
 ```
 
 ---
@@ -620,19 +623,46 @@ A **BatchFlow** runs a **Flow** multiple times, each time with different `params
 
 ### Example: Summarize Many Files
 
-```python
-class SummarizeAllFiles(BatchFlow):
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value>
-        # Return a list of param dicts (one per file)
-        filenames = list(shared["data"].keys())  # e.g., ["file1.txt", "file2.txt", ...]
-        return [{"filename": fn} for fn in filenames]
+```rust
+// Note: PocketFlow-Rust uses a different approach for batch processing.
+// You would typically iterate over files within a node's execute method.
 
-# Suppose we have a per-file Flow (e.g., load_file >> summarize >> reduce):
-summarize_file = SummarizeFile(start=load_file)
+pub struct SummarizeAllFiles;
 
-# Wrap that flow into a BatchFlow:
-summarize_all_files = SummarizeAllFiles(start=summarize_file)
-summarize_all_files.run(shared)
+#[async_trait]
+impl Node for SummarizeAllFiles {
+    type State = MyState;
+
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let data = context.get("data")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow!("No data found"))?;
+        
+        let mut file_summaries = serde_json::Map::new();
+        
+        // Process each file
+        for (filename, content) in data {
+            if let Some(text) = content.as_str() {
+                let prompt = format!("Summarize this file: {}", text);
+                let summary = call_llm(&prompt).await?;
+                file_summaries.insert(filename.clone(), json!(summary));
+            }
+        }
+        
+        Ok(json!(file_summaries))
+    }
+
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(val) = result {
+            context.set("file_summaries", val.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
 ```
 
 ### Under the Hood
@@ -652,23 +682,60 @@ You can nest a **BatchFlow** in another **BatchFlow**. For instance:
 
 At each level, **BatchFlow** merges its own param dict with the parent’s. By the time you reach the **innermost** node, the final `params` is the merged result of **all** parents in the chain. This way, a nested structure can keep track of the entire context (e.g., directory + file name) at once.
 
-```python
+```rust
+// Note: PocketFlow-Rust handles nested batch processing differently.
+// You would typically use nested loops or recursive processing within nodes.
 
-class FileBatchFlow(BatchFlow):
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value>
-        directory = self.params["directory"]
-        # e.g., files = ["file1.txt", "file2.txt", ...]
-        files = [f for f in os.listdir(directory) if f.endswith(".txt")]
-        return [{"filename": f} for f in files]
+use std::fs;
+use std::path::Path;
 
-class DirectoryBatchFlow(BatchFlow):
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value>
-        directories = [ "/path/to/dirA", "/path/to/dirB"]
-        return [{"directory": d} for d in directories]
+pub struct ProcessDirectories;
 
-# MapSummaries have params like {"directory": "/path/to/dirA", "filename": "file1.txt"}
-inner_flow = FileBatchFlow(start=MapSummaries())
-outer_flow = DirectoryBatchFlow(start=inner_flow)
+#[async_trait]
+impl Node for ProcessDirectories {
+    type State = MyState;
+
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let directories = vec!["/path/to/dirA", "/path/to/dirB"];
+        let mut all_results = serde_json::Map::new();
+        
+        for directory in directories {
+            let path = Path::new(directory);
+            if path.is_dir() {
+                // Read all .txt files in directory
+                for entry in fs::read_dir(path)? {
+                    let entry = entry?;
+                    let file_path = entry.path();
+                    
+                    if file_path.extension().and_then(|s| s.to_str()) == Some("txt") {
+                        let content = fs::read_to_string(&file_path)?;
+                        let filename = file_path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("unknown");
+                        
+                        // Process file
+                        let prompt = format!("Summarize: {}", content);
+                        let summary = call_llm(&prompt).await?;
+                        all_results.insert(filename.to_string(), json!(summary));
+                    }
+                }
+            }
+        }
+        
+        Ok(json!(all_results))
+    }
+
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(val) = result {
+            context.set("results", val.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
 ```
 
 ================================================
@@ -784,7 +851,7 @@ let flow = build_flow!(
     ]
 );
 
-let mut context = Context::new();
+let context = Context::new();
 let result = flow.run(context).await?;
 ```
 
@@ -816,13 +883,10 @@ struct SummarizeFile;
 
 #[async_trait]
 impl Node for SummarizeFile {
-    type State = MyState;
-
-    async fn prep(&self, context: &Context) -> Result<serde_json::Value> {
-        let filename = context.get("filename").and_then(|v| v.as_str()).unwrap_or("");
-        let data = context.get("data").cloned().unwrap_or_default();
-        Ok(data.get(filename).cloned().unwrap_or_default())
-    }
+    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value>
+        # Access the node's param
+        filename = self.params["filename"]
+        return shared["data"].get(filename, "")
 
     async fn execute(def exec(self, prep_res):self, prep_res: serde_json::Value) -> Result<serde_json::Value>
         prompt = f"Summarize: {prep_res}"
@@ -885,10 +949,20 @@ A **Flow** begins with a **start** node. You call `Flow(start=some_node)` to spe
 
 Here's a minimal flow of two nodes in a chain:
 
-```python
-node_a >> node_b
-flow = Flow(start=node_a)
-flow.run(shared)
+```rust
+let node_a = NodeA;
+let node_b = NodeB;
+
+let flow = build_flow!(
+    start: ("node_a", node_a),
+    nodes: [("node_b", node_b)],
+    edges: [
+        ("node_a", "node_b", MyState::Success)
+    ]
+);
+
+let context = Context::new();
+flow.run(context).await?;
 ```
 
 - When you run the flow, it executes `node_a`.  
@@ -906,16 +980,26 @@ Here's a simple expense approval flow that demonstrates branching and looping. T
 
 We can wire them like this:
 
-```python
-# Define the flow connections
-review - "approved" >> payment        # If approved, process payment
-review - "needs_revision" >> revise   # If needs changes, go to revision
-review - "rejected" >> finish         # If rejected, finish the process
+```rust
+let review = ReviewNode;
+let payment = PaymentNode;
+let revise = ReviseNode;
 
-revise >> review   # After revision, go back for another review
-payment >> finish  # After payment, finish the process
+let flow = build_flow!(
+    start: ("review", review),
+    nodes: [
+        ("payment", payment),
+        ("revise", revise)
+    ],
+    edges: [
+        ("review", "payment", MyState::Approved),
+        ("review", "revise", MyState::NeedsRevision),
+        ("revise", "review", MyState::Success)
+    ]
+);
 
-flow = Flow(start=review)
+let context = Context::new();
+flow.run(context).await?;
 ```
 
 Let's see how it flows:
@@ -1395,58 +1479,102 @@ You first break down the task using [BatchNode](../core_abstraction/batch.md) in
 
 ### Example: Document Summarization
 
-```python
-class SummarizeAllFiles(BatchNode):
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value>
-        files_dict = shared["files"]  # e.g. 10 files
-        return list(files_dict.items())  # [("file1.txt", "aaa..."), ("file2.txt", "bbb..."), ...]
+```rust
+// Map phase: Summarize each file
+pub struct SummarizeAllFiles;
 
-    async fn execute(def exec(self, one_file):self, one_file: serde_json::Value) -> Result<serde_json::Value>
-        filename, file_content = one_file
-        summary_text = call_llm(f"Summarize the following file:\n{file_content}")
-        return (filename, summary_text)
+#[async_trait]
+impl Node for SummarizeAllFiles {
+    type State = MyState;
 
-    def post(self, shared, prep_res, exec_res_list):
-        shared["file_summaries"] = dict(exec_res_list)
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let files = context.get("files")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow!("No files found"))?;
+        
+        let mut file_summaries = serde_json::Map::new();
+        
+        for (filename, file_content) in files {
+            if let Some(content) = file_content.as_str() {
+                let prompt = format!("Summarize the following file:\n{}", content);
+                let summary = call_llm(&prompt).await?;
+                file_summaries.insert(filename.clone(), json!(summary));
+            }
+        }
+        
+        Ok(json!(file_summaries))
+    }
 
-struct CombineSummaries;
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(val) = result {
+            context.set("file_summaries", val.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
+
+// Reduce phase: Combine summaries
+pub struct CombineSummaries;
 
 #[async_trait]
 impl Node for CombineSummaries {
     type State = MyState;
 
-    async fn prep(&self, context: &Context) -> Result<serde_json::Value> {
-        context.get("file_summaries").cloned().ok_or_else(|| anyhow!("No file summaries found"))
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let file_summaries = context.get("file_summaries")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow!("No file summaries found"))?;
+        
+        let mut text_list = Vec::new();
+        for (fname, summ) in file_summaries {
+            if let Some(s) = summ.as_str() {
+                text_list.push(format!("{} summary:\n{}\n", fname, s));
+            }
+        }
+        let big_text = text_list.join("\n---\n");
+        
+        let prompt = format!("Combine these file summaries into one final summary:\n{}", big_text);
+        call_llm(&prompt).await
     }
 
-    async fn execute(&self, file_summaries: serde_json::Value) -> Result<serde_json::Value> {
-        # format as: "File1: summary\nFile2: summary...\n"
-        text_list = []
-        for fname, summ in file_summaries.items():
-            text_list.append(f"{fname} summary:\n{summ}\n")
-        big_text = "\n---\n".join(text_list)
-
-        return call_llm(f"Combine these file summaries into one final summary:\n{big_text}")
-
-    def post(self, shared, prep_res, final_summary):
-        shared["all_files_summary"] = final_summary
-
-batch_node = SummarizeAllFiles()
-combine_node = CombineSummaries()
-batch_node >> combine_node
-
-flow = Flow(start=batch_node)
-
-shared = {
-    "files": {
-        "file1.txt": "Alice was beginning to get very tired of sitting by her sister...",
-        "file2.txt": "Some other interesting text ...",
-        # ...
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(val) = result {
+            context.set("all_files_summary", val.clone());
+            if let Some(summary) = val.as_str() {
+                println!("Final Summary:\n{}", summary);
+            }
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
     }
 }
-flow.run(shared)
-print("Individual Summaries:", shared["file_summaries"])
-print("\nFinal Summary:\n", shared["all_files_summary"])
+
+// Build and run the flow
+let summarize_node = SummarizeAllFiles;
+let combine_node = CombineSummaries;
+
+let flow = build_flow!(
+    start: ("summarize", summarize_node),
+    nodes: [("combine", combine_node)],
+    edges: [
+        ("summarize", "combine", MyState::Success)
+    ]
+);
+
+let mut context = Context::new();
+context.set("files", json!({
+    "file1.txt": "Alice was beginning to get very tired of sitting by her sister...",
+    "file2.txt": "Some other interesting text ..."
+}));
+
+let result = flow.run(context).await?;
 ```
 
 ================================================
@@ -1558,68 +1686,121 @@ We have 3 nodes:
 2. `RetrieveDocs` – retrieves top chunk from the index.
 3. `GenerateAnswer` – calls the LLM with the question + chunk to produce the final answer.
 
-```python
-struct EmbedQuery;
+```rust
+pub struct EmbedQuery;
 
 #[async_trait]
 impl Node for EmbedQuery {
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value>
-        return shared["question"]
+    type State = MyState;
 
-    async fn execute(def exec(self, question):self, question: serde_json::Value) -> Result<serde_json::Value>
-        return get_embedding(question)
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let question = context.get("question")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("No question found"))?;
+        
+        let embedding = get_embedding(question).await?;
+        Ok(embedding)
+    }
 
-    def post(self, shared, prep_res, q_emb):
-        shared["q_emb"] = q_emb
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(emb) = result {
+            context.set("q_emb", emb.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
 
-struct RetrieveDocs;
+pub struct RetrieveDocs;
 
 #[async_trait]
 impl Node for RetrieveDocs {
     type State = MyState;
 
-    async fn prep(&self, context: &Context) -> Result<serde_json::Value> {
-        // We'll need the query embedding, plus the offline index/chunks
-        let q_emb = context.get("q_emb").cloned().ok_or_else(|| anyhow!("No query embedding"))?;
-        let index = context.get("index").cloned().ok_or_else(|| anyhow!("No index"))?;
-        let all_chunks = context.get("all_chunks").cloned().ok_or_else(|| anyhow!("No chunks"))?;
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let q_emb = context.get("q_emb")
+            .ok_or_else(|| anyhow!("No query embedding found"))?;
+        let index = context.get("index")
+            .ok_or_else(|| anyhow!("No index found"))?;
+        let all_chunks = context.get("all_chunks")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("No chunks found"))?;
         
-        Ok(json!({ "q_emb": q_emb, "index": index, "all_chunks": all_chunks }))
+        // Search index for most relevant chunk
+        let (best_id, _distance) = search_index(index, q_emb, 1)?;
+        let relevant_chunk = all_chunks.get(best_id)
+            .ok_or_else(|| anyhow!("Chunk not found"))?;
+        
+        println!("Retrieved chunk: {}...", 
+            relevant_chunk.as_str().unwrap_or("").chars().take(60).collect::<String>());
+        
+        Ok(relevant_chunk.clone())
     }
 
-    async fn execute(def exec(self, inputs):self, inputs: serde_json::Value) -> Result<serde_json::Value>
-        q_emb, index, chunks = inputs
-        I, D = search_index(index, q_emb, top_k=1)
-        best_id = I[0][0]
-        relevant_chunk = chunks[best_id]
-        return relevant_chunk
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(chunk) = result {
+            context.set("retrieved_chunk", chunk.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
 
-    def post(self, shared, prep_res, relevant_chunk):
-        shared["retrieved_chunk"] = relevant_chunk
-        print("Retrieved chunk:", relevant_chunk[:60], "...")
-
-struct GenerateAnswer;
+pub struct GenerateAnswer;
 
 #[async_trait]
 impl Node for GenerateAnswer {
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value>
-        return shared["question"], shared["retrieved_chunk"]
+    type State = MyState;
 
-    async fn execute(def exec(self, inputs):self, inputs: serde_json::Value) -> Result<serde_json::Value>
-        question, chunk = inputs
-        prompt = f"Question: {question}\nContext: {chunk}\nAnswer:"
-        return call_llm(prompt)
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let question = context.get("question")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("No question found"))?;
+        let chunk = context.get("retrieved_chunk")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("No retrieved chunk found"))?;
+        
+        let prompt = format!("Question: {}\nContext: {}\nAnswer:", question, chunk);
+        let answer = call_llm(&prompt).await?;
+        
+        println!("Answer: {}", answer);
+        Ok(json!(answer))
+    }
 
-    def post(self, shared, prep_res, answer):
-        shared["answer"] = answer
-        print("Answer:", answer)
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(answer) = result {
+            context.set("answer", answer.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
 
-embed_qnode = EmbedQuery()
-retrieve_node = RetrieveDocs()
-generate_node = GenerateAnswer()
+// Build the online RAG flow
+let embed_qnode = EmbedQuery;
+let retrieve_node = RetrieveDocs;
+let generate_node = GenerateAnswer;
 
-embed_qnode >> retrieve_node >> generate_node
-OnlineFlow = Flow(start=embed_qnode)
+let online_flow = build_flow!(
+    start: ("embed_query", embed_qnode),
+    nodes: [
+        ("retrieve", retrieve_node),
+        ("generate", generate_node)
+    ],
+    edges: [
+        ("embed_query", "retrieve", MyState::Success),
+        ("retrieve", "generate", MyState::Success)
+    ]
+);
 ```
 
 Usage example:
@@ -1780,42 +1961,111 @@ Many real-world tasks are too complex for one LLM call. The solution is to **Tas
 
 ### Example: Article Writing
 
-```python
-struct GenerateOutline;
+```rust
+pub struct GenerateOutline;
 
 #[async_trait]
 impl Node for GenerateOutline {
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value> return shared["topic"]
-    async fn execute(def exec(self, topic):self, topic: serde_json::Value) -> Result<serde_json::Value> return call_llm(f"Create a detailed outline for an article about {topic}")
-    async fn post_process(def post(self, shared, prep_res, exec_res):self, context: def post(self, shared, prep_res, exec_res):mut Context, result: def post(self, shared, prep_res, exec_res):Result<serde_json::Value>) -> Result<ProcessResult<MyState>> shared["outline"] = exec_res
+    type State = MyState;
 
-struct WriteSection;
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let topic = context.get("topic")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("No topic found"))?;
+        
+        let prompt = format!("Create a detailed outline for an article about {}", topic);
+        let outline = call_llm(&prompt).await?;
+        Ok(json!(outline))
+    }
+
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(val) = result {
+            context.set("outline", val.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
+
+pub struct WriteSection;
 
 #[async_trait]
 impl Node for WriteSection {
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value> return shared["outline"]
-    async fn execute(def exec(self, outline):self, outline: serde_json::Value) -> Result<serde_json::Value> return call_llm(f"Write content based on this outline: {outline}")
-    async fn post_process(def post(self, shared, prep_res, exec_res):self, context: def post(self, shared, prep_res, exec_res):mut Context, result: def post(self, shared, prep_res, exec_res):Result<serde_json::Value>) -> Result<ProcessResult<MyState>> shared["draft"] = exec_res
+    type State = MyState;
 
-struct ReviewAndRefine;
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let outline = context.get("outline")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("No outline found"))?;
+        
+        let prompt = format!("Write content based on this outline: {}", outline);
+        let draft = call_llm(&prompt).await?;
+        Ok(json!(draft))
+    }
+
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(val) = result {
+            context.set("draft", val.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
+
+pub struct ReviewAndRefine;
 
 #[async_trait]
 impl Node for ReviewAndRefine {
-    async fn prep(def prep(self, shared):self, context: def prep(self, shared):Context) -> Result<serde_json::Value> return shared["draft"]
-    async fn execute(def exec(self, draft):self, draft: serde_json::Value) -> Result<serde_json::Value> return call_llm(f"Review and improve this draft: {draft}")
-    async fn post_process(def post(self, shared, prep_res, exec_res):self, context: def post(self, shared, prep_res, exec_res):mut Context, result: def post(self, shared, prep_res, exec_res):Result<serde_json::Value>) -> Result<ProcessResult<MyState>> shared["final_article"] = exec_res
+    type State = MyState;
 
-# Connect nodes
-outline = GenerateOutline()
-write = WriteSection()
-review = ReviewAndRefine()
+    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
+        let draft = context.get("draft")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("No draft found"))?;
+        
+        let prompt = format!("Review and improve this draft: {}", draft);
+        let final_article = call_llm(&prompt).await?;
+        Ok(json!(final_article))
+    }
 
-outline >> write >> review
+    async fn post_process(
+        &self,
+        context: &mut Context,
+        result: &Result<serde_json::Value>,
+    ) -> Result<ProcessResult<MyState>> {
+        if let Ok(val) = result {
+            context.set("final_article", val.clone());
+        }
+        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
+    }
+}
 
-# Create and run flow
-writing_flow = Flow(start=outline)
-shared = {"topic": "AI Safety"}
-writing_flow.run(shared)
+// Build and run the flow
+let outline = GenerateOutline;
+let write = WriteSection;
+let review = ReviewAndRefine;
+
+let writing_flow = build_flow!(
+    start: ("outline", outline),
+    nodes: [
+        ("write", write),
+        ("review", review)
+    ],
+    edges: [
+        ("outline", "write", MyState::Success),
+        ("write", "review", MyState::Success)
+    ]
+);
+
+let mut context = Context::new();
+context.set("topic", json!("AI Safety"));
+writing_flow.run(context).await?;
 ```
 
 For *dynamic cases*, consider using [Agents](./agent.md).
@@ -1863,6 +2113,9 @@ Here, we provide some minimal example implementations:
             .clone()
             .unwrap_or_default())
     }
+
+    // Example usage
+    // call_llm("How are you?").await?;
     ```
     > Store the API key in an environment variable like OPENAI_API_KEY for security.
     {: .best-practice }
@@ -2011,53 +2264,26 @@ Feel free to enhance your `call_llm` function as needed. Here are examples:
 
 - Handle chat history:
 
-```rust
-use async_openai::{
-    types::{ChatCompletionRequestMessage, CreateChatCompletionRequestArgs},
-    Client,
-};
-use anyhow::Result;
-
-pub async fn call_llm(messages: Vec<ChatCompletionRequestMessage>) -> Result<String> {
-    let client = Client::new();
-    let request = CreateChatCompletionRequestArgs::default()
-        .model("gpt-4o")
-        .messages(messages)
-        .build()?;
-    let response = client.chat().create(request).await?;
-    Ok(response.choices[0].message.content.clone().unwrap_or_default())
-}
+```python
+def call_llm(messages):
+    from openai import OpenAI
+    client = OpenAI(api_key="YOUR_API_KEY_HERE")
+    r = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages
+    )
+    return r.choices[0].message.content
 ```
 
 - Add in-memory caching 
 
-```rust
-use std::collections::HashMap;
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
+```python
+from functools import lru_cache
 
-static CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| {
-    Mutex::new(HashMap::new())
-});
-
-pub async fn call_llm(prompt: &str) -> Result<String> {
-    // Check cache first
-    if let Ok(cache) = CACHE.lock() {
-        if let Some(cached) = cache.get(prompt) {
-            return Ok(cached.clone());
-        }
-    }
-    
-    // Make actual LLM call
-    let response = "...".to_string(); // Your implementation here
-    
-    // Store in cache
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(prompt.to_string(), response.clone());
-    }
-    
-    Ok(response)
-}
+@lru_cache(maxsize=1000)
+def call_llm(prompt):
+    # Your implementation here
+    pass
 ```
 
 > ⚠️ Caching conflicts with Node retries, as retries yield the same result.
@@ -2066,76 +2292,34 @@ pub async fn call_llm(prompt: &str) -> Result<String> {
 {: .warning }
 
 
-```rust
-use std::collections::HashMap;
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
+```python
+from functools import lru_cache
 
-static CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| {
-    Mutex::new(HashMap::new())
-});
+@lru_cache(maxsize=1000)
+def cached_call(prompt):
+    pass
 
-async fn cached_call(prompt: &str) -> Result<String> {
-    // Your actual LLM implementation here
-    Ok("...".to_string())
-}
+def call_llm(prompt, use_cache):
+    if use_cache:
+        return cached_call(prompt)
+    # Call the underlying function directly
+    return cached_call.__wrapped__(prompt)
 
-pub async fn call_llm(prompt: &str, use_cache: bool) -> Result<String> {
-    if use_cache {
-        if let Ok(cache) = CACHE.lock() {
-            if let Some(cached) = cache.get(prompt) {
-                return Ok(cached.clone());
-            }
-        }
-    }
-    
-    // Call the underlying function directly
-    let response = cached_call(prompt).await?;
-    
-    if use_cache {
-        if let Ok(mut cache) = CACHE.lock() {
-            cache.insert(prompt.to_string(), response.clone());
-        }
-    }
-    
-    Ok(response)
-}
-
-pub struct SummarizeNode;
+struct SummarizeNode;
 
 #[async_trait]
 impl Node for SummarizeNode {
-    type State = MyState;
-    
-    async fn execute(&self, context: &Context) -> Result<serde_json::Value> {
-        let text = context.get("text")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("No text found"))?;
-        let prompt = format!("Summarize: {}", text);
-        let result = call_llm(&prompt, true).await?;
-        Ok(json!(result))
-    }
-    
-    async fn post_process(
-        &self,
-        context: &mut Context,
-        result: &Result<serde_json::Value>,
-    ) -> Result<ProcessResult<MyState>> {
-        if let Ok(val) = result {
-            context.set("summary", val.clone());
-        }
-        Ok(ProcessResult::new(MyState::Success, "success".to_string()))
-    }
-}
+    async fn execute(def exec(self, text):self, text: serde_json::Value) -> Result<serde_json::Value>
+        return call_llm(f"Summarize: {text}", self.cur_retry==0)
 ```
 
 - Enable logging:
 
-```rust
-async fn call_llm(prompt: &str) -> Result<String> {
-    log::info!("Prompt: {}", prompt);
-    // Your implementation here
-    let response = "...".to_string();
-    log::info!("Response: {}", response);
-    Ok(response)
-}
+```python
+def call_llm(prompt):
+    import logging
+    logging.info(f"Prompt: {prompt}")
+    response = ... # Your implementation here
+    logging.info(f"Response: {response}")
+    return response
+```
