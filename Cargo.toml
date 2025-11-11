@@ -11,7 +11,18 @@ pocketflow_rs = "0.1"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 async-trait = "0.1"
+thiserror = "1"
+
+# HTTP client for LLM calls
+reqwest = { version = "0.11", features = ["json"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Additional dependencies for OpenRouter integration
+hashbrown = "0.14"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+dotenvy = "0.15"
+log = "0.4"
+env_logger = "0.10"
