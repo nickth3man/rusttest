@@ -1,8 +1,8 @@
-mod nodes;
+mod nodes;`nmod thread;
 mod state;
 mod utils;
 
-use anyhow::Result;
+use anyhow::Result;`nuse crate::thread::{TenantId, ThreadId, Thread, ThreadStore};
 use nodes::{
     AnswerNode, BatchProcessingNode, CostOptimizationNode, GetQuestionNode, ModelDiscoveryNode,
     OpenRouterConfigNode,
